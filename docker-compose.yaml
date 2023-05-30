@@ -1,5 +1,5 @@
 version: '3.8'
-
+# dynamic change /src/resources/views/welcome.blade.php
 services: 
   server:
   # this is the frontend web server nginx
