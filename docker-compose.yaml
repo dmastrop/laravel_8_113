@@ -1,0 +1,103 @@
+version: '3.8'
+
+services: 
+  server:
+  # this is the frontend web server nginx
+    #image: 'nginx:stable-alpine'
+
+    # this image is on dockerhub.  It runs internally on port 80
+    # image is commented out now after creating the nginx.dockerfile because this dockerfile will be used to build a custom image that is extensible to deployment environment
+    #with snapshots of nginx.conf file AND all the src code
+    build: 
+      #context: ./dockerfiles
+      # this will not work because the context is also where the image will be built. nginx folder and src are outside of this dockerfiles folder. So we can't build in this folder.
+      # nginx and src are not reachable.  need...
+      context: .
+      dockerfile: dockerfiles/nginx.dockerfile
+    ports: 
+      - '8000:80'
+      #  Freed up 8000 from the Section 6 backend application setup (it is using 8005 now) 
+    volumes: 
+      - ./src:/var/www/html
+      # we are mapping source code folder to /var/www/html because that is where nginx is serving up content from 
+      # nginx.conf file has root /var/www/html/public;  the /src/public is what needs to be mapped here. 
+      # so now all these public files will be available to nginx server
+      # - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      # local folder is nginx.conf.  The offical docs on dockerhub states the conf file is in /etc/nginx container path
+      # this needs to be revised. Actual path on nginx container is /etc/nginx/conf.d/default.conf
+      # our own file nginx.conf is merged into a larger file at the/etc/nginx/conf.d/default.conf location.
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      #NOTE: these bind mounts will not work in deployment so the nginx.dockerfile is now created
+    depends_on:
+      - php
+      - mysql
+# use depends_on to have php and mysql auto-start before server when start server
+  
+  php:
+  # there is a dockerhub php but we are going to need to build a custom image so we will need a dockerfile. Keep dockerfiles under a dockerfiles directory in this project.
+    build: 
+      #context: ./dockerfiles
+      #dockerfile: php.dockerfile
+    #this php interpreter needs to be able to access our source code on our workspace.
+    #this is best done with a bind mount.  Looking at the php.dockerfile it needs to map to the /var/www/html WORKDIR specified in the php.dockerfile
+    # /src is our source code folder
+    # delegated will use batch processing. It is an optimization. We don't want to write to frequently. It does not need instant communication updates
+    # no read only.
+    # Since we are COPY src . in the php.dockerfile we will now need to change the context and dockerfile above similar to server service above:
+      context: .
+      dockerfile: dockerfiles/php.dockerfile
+    volumes:
+      - ./src:/var/www/html:delegated
+    # the ports mapping is not needed. See nginx.conf. Nginx will communicate directly with php on 9000. A mapping would only be needed if localhost needed to contact php. That is not the case.
+    # the nginx.conf call to php has been modified accordingly from php:3000 to php:9000  
+    # NOTE: bind mount with deployment will not work so we need to add a  COPY src . to the php.dockerfile, similar to nginx.dockerfile.
+    #ports:
+      #- '3000:9000'  
+
+  mysql:
+  # the php interpreter needs to communicate wit the mysql and once again will use mysql as container name to communicate with it (since docker network is created)
+  # we will be using an image from dockerhub and not building from scratch like the php interpreter
+    image: mysql:5.7
+    # env variable configuration can be found on dockerhub
+    env_file:
+      - ./env/mysql.env
+
+  # the next 3 services are utility containers
+
+  composer:
+  # composer helps us create the laravel application
+  # this is a utility container used by us to set up laravel application, and internally by laravel
+    build:
+      context: ./dockerfiles
+      dockerfile: composer.dockerfile
+    #  Composer will help create laravel application and once it generates the source code in /var/www/html, it will be mirrored back to our local /src folder
+    volumes:
+      - ./src:/var/www/html
+      # this is a bind mount
+
+  artisan:
+  #artisan requires php built into it so copy the dockerfile php from above
+    build: 
+      context: .
+      dockerfile: dockerfiles/php.dockerfile
+   #artisan executes on our source code so we need a bind mount volume again from /src into the container.
+    volumes:
+       - ./src:/var/www/html
+   # we can add an entrypoint in docker-compose (normally) it is in Dockerfile.
+   # but the Dockerfile that we are using (php.dockerfile) does not have an entrypoint (it is not a utility container)
+   # This will overwrite or add to the php.dockerfile
+   # we will use the command php and execute on the artisan php file.  This is in the /src folder which is bind mounted into this container
+   # executing this artisan 
+    entrypoint: ['php', '/var/www/html/artisan'] 
+  
+  npm:
+  # for npm we are doing to set the working directory here because there is no dockerfile for the npm service
+  # also set an entrypoint as "npm" as a utility container
+  #map the /src directory to the /var/www/hmtl
+    image: node:14
+    working_dir: /var/www/html
+    entrypoint: ['npm']
+    volumes:
+      - ./src:/var/www/html
+  # it is up to us whether to split with dockerfile and docker-compose or 
+  # No COPY or RUN in docker-compose.  Good for ENTRYPOINT.
